@@ -1,0 +1,20 @@
+{
+    "name": "qdenka/ultimatelinkchecker",
+    "description": "The Aggregate Link Checker library provides a way to check multiple links for various types of online threats using different APIs, such as Google Safebrowsing, Yandex Safebrowsing, Facebook, and Virustotal.",
+    "type": "library",
+    "autoload": {
+        "psr-4": {
+            "QDenka\\UltimateLinkChecker\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "qdenka",
+            "email": "denis@kaban.dev"
+        }
+    ],
+    "require": {
+        "guzzlehttp/guzzle": "^7.5",
+        "php": "^7.4"
+    }
+}
