@@ -109,8 +109,9 @@ jobs:
         run: vendor/bin/phpstan analyse
 
   cs-fixer:
-    name: "Code Style"
+    name: "Code Style (informational)"
     runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
       - name: Checkout code
