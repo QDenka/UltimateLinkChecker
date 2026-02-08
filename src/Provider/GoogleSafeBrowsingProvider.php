@@ -23,13 +23,17 @@ final class GoogleSafeBrowsingProvider extends AbstractProvider
         string $apiKey,
         ?ClientInterface $httpClient = null,
         ?RequestFactoryInterface $requestFactory = null,
-        ?StreamFactoryInterface $streamFactory = null
+        ?StreamFactoryInterface $streamFactory = null,
+        float $timeout = 5.0,
+        int $retries = 1
     ) {
         parent::__construct(
             $apiKey,
-            $httpClient ?? new Client(),
+            $httpClient ?? new Client(['timeout' => $timeout]),
             $requestFactory ?? new HttpFactory(),
-            $streamFactory ?? new HttpFactory()
+            $streamFactory ?? new HttpFactory(),
+            $timeout,
+            $retries
         );
     }
 
@@ -45,8 +49,6 @@ final class GoogleSafeBrowsingProvider extends AbstractProvider
      * @param string $url
      * @return CheckResult
      * @throws ProviderException
-     * @throws \JsonException
-     * @throws \Psr\Http\Client\ClientExceptionInterface
      */
     public function check(string $url): CheckResult
     {
@@ -54,30 +56,34 @@ final class GoogleSafeBrowsingProvider extends AbstractProvider
         $result = $this->createResult($normalizedUrl);
 
         try {
-            $payload = $this->buildRequestPayload([$normalizedUrl]);
-            $request = $this->requestFactory->createRequest('POST', $this->getApiUrl())
-                ->withHeader('Content-Type', 'application/json');
+            return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
+                $payload = $this->buildRequestPayload([$normalizedUrl]);
+                $request = $this->requestFactory->createRequest('POST', $this->getApiUrl())
+                    ->withHeader('Content-Type', 'application/json');
 
-            $request = $request->withBody(
-                $this->streamFactory->createStream(json_encode($payload, JSON_THROW_ON_ERROR))
-            );
+                $request = $request->withBody(
+                    $this->streamFactory->createStream(json_encode($payload, JSON_THROW_ON_ERROR))
+                );
 
-            $response = $this->httpClient->sendRequest($request);
-            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+                $response = $this->httpClient->sendRequest($request);
+                $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-            if (isset($data['matches']) && is_array($data['matches'])) {
-                foreach ($data['matches'] as $match) {
-                    $threat = new Threat(
-                        type: $match['threatType'] ?? 'UNKNOWN',
-                        platform: $match['platformType'] ?? 'ANY_PLATFORM',
-                        description: $this->getThreatDescription($match['threatType'] ?? 'UNKNOWN'),
-                        url: $match['threat']['url'] ?? $normalizedUrl,
-                        metadata: $match
-                    );
+                if (isset($data['matches']) && is_array($data['matches'])) {
+                    foreach ($data['matches'] as $match) {
+                        $threat = new Threat(
+                            type: $match['threatType'] ?? 'UNKNOWN',
+                            platform: $match['platformType'] ?? 'ANY_PLATFORM',
+                            description: $this->getThreatDescription($match['threatType'] ?? 'UNKNOWN'),
+                            url: $match['threat']['url'] ?? $normalizedUrl,
+                            metadata: $match
+                        );
 
-                    $result->addThreat($this->getName(), $threat);
+                        $result->addThreat($this->getName(), $threat);
+                    }
                 }
-            }
+
+                return $result;
+            });
         } catch (GuzzleException $e) {
             throw new ProviderException(
                 sprintf('Error checking URL with Google Safe Browsing: %s', $e->getMessage()),
@@ -85,8 +91,6 @@ final class GoogleSafeBrowsingProvider extends AbstractProvider
                 $e
             );
         }
-
-        return $result;
     }
 
     /**

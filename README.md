@@ -2,8 +2,6 @@
 
 ![License](https://img.shields.io/github/license/qdenka/ultimatelinkchecker)
 ![PHP Version](https://img.shields.io/badge/php-8.1%2B-blue.svg)
-![Tests](https://img.shields.io/github/workflow/status/qdenka/ultimatelinkchecker/tests/main)
-![Coverage](https://img.shields.io/codecov/c/github/qdenka/ultimatelinkchecker)
 
 A powerful, flexible PHP library for checking links against multiple security services.
 
@@ -15,6 +13,8 @@ A powerful, flexible PHP library for checking links against multiple security se
 - 🔧 Easily extensible to add new providers
 - 💾 Optional caching of results to reduce API calls
 - 📊 Detailed threat information and comprehensive reports
+- 🔄 Configurable retry logic with incremental backoff
+- 📝 PSR-3 compatible logging
 
 ## Installation
 
@@ -45,7 +45,12 @@ $result = $checker->check('https://example.com');
 if ($result->isSafe()) {
     echo "The URL is safe!";
 } else {
-    echo "The URL is unsafe: " . $result->getThreatType();
+    echo "Threats found:" . PHP_EOL;
+    foreach ($result->getThreats() as $providerName => $threats) {
+        foreach ($threats as $threat) {
+            echo "  [{$providerName}] " . $threat->getDescription() . PHP_EOL;
+        }
+    }
 }
 
 // Check multiple URLs at once
@@ -74,20 +79,24 @@ $checker->addProvider(new GoogleSafeBrowsingProvider('google-api-key'));
 $checker->addProvider(new YandexSafeBrowsingProvider('yandex-api-key'));
 $checker->addProvider(new VirusTotalProvider('virustotal-api-key'));
 
-// Check against all providers (uses PHP 8.1 named arguments)
+// Check against all providers
+// CONSENSUS_ANY = unsafe if ANY provider flags it (strictest, default)
+// CONSENSUS_ALL = unsafe only if ALL providers flag it (most lenient)
+// CONSENSUS_MAJORITY = unsafe if majority flags it
 $result = $checker->check(
     url: 'https://example.com',
-    consensus: UltimateLinkChecker::CONSENSUS_ANY // or CONSENSUS_ALL, CONSENSUS_MAJORITY
+    consensus: UltimateLinkChecker::CONSENSUS_ANY
 );
 
 if ($result->isSafe()) {
     echo "The URL is considered safe by the selected consensus method";
 } else {
-    echo "The URL is unsafe";
-    $threats = $result->getThreats();
-    
-    foreach ($threats as $providerName => $threat) {
-        echo "$providerName: " . $threat->getDescription() . PHP_EOL;
+    echo "The URL is unsafe" . PHP_EOL;
+
+    foreach ($result->getThreats() as $providerName => $threats) {
+        foreach ($threats as $threat) {
+            echo "  [{$providerName}] " . $threat->getDescription() . PHP_EOL;
+        }
     }
 }
 ```
@@ -121,21 +130,37 @@ foreach ($promises as $url => $promise) {
         }
     );
 }
-
-// Wait for all promises to complete
-\React\Promise\all($promises)->wait();
 ```
 
 ## Available Providers
 
-- Google Safe Browsing
-- Yandex Safe Browsing
-- VirusTotal
-- Facebook URL Security
-- PhishTank
-- OPSWAT MetaDefender
-- Cisco Talos
-- IPQualityScore
+| Provider | Class | Description |
+|---|---|---|
+| Google Safe Browsing | `GoogleSafeBrowsingProvider` | Google's threat database |
+| Yandex Safe Browsing | `YandexSafeBrowsingProvider` | Yandex's threat database |
+| VirusTotal | `VirusTotalProvider` | Multi-engine antivirus aggregator |
+| Facebook URL Security | `FacebookProvider` | Facebook URL sharing safety |
+| PhishTank | `PhishTankProvider` | Community phishing database |
+| OPSWAT MetaDefender | `OPSWATProvider` | Multi-scanning URL reputation |
+| Cisco Talos | `CiscoTalosProvider` | Cisco threat intelligence |
+| IPQualityScore | `IPQualityScoreProvider` | URL reputation scoring |
+
+## Using the Provider Factory
+
+```php
+use Qdenka\UltimateLinkChecker\Factory\ProviderFactory;
+use Qdenka\UltimateLinkChecker\UltimateLinkChecker;
+
+$checker = new UltimateLinkChecker();
+
+// Create providers by name with optional timeout and retries
+$checker->addProvider(ProviderFactory::createProvider('google_safebrowsing', 'api-key', timeout: 10.0, retries: 2));
+$checker->addProvider(ProviderFactory::createProvider('virustotal', 'api-key'));
+$checker->addProvider(ProviderFactory::createProvider('facebook', 'app_id|app_secret'));
+
+// List all available providers
+$available = ProviderFactory::getAvailableProviders();
+```
 
 ## Creating Your Own Provider
 
@@ -150,14 +175,14 @@ class MyCustomProvider implements ProviderInterface
     {
         return 'my_custom_provider';
     }
-    
+
     public function check(string $url): CheckResult
     {
+        $result = new CheckResult($url);
+
         // Your implementation to check the URL
         $isSafe = true; // Your logic here
-        
-        $result = new CheckResult($url);
-        
+
         if (!$isSafe) {
             $threat = new Threat(
                 type: 'MALWARE',
@@ -166,13 +191,12 @@ class MyCustomProvider implements ProviderInterface
             );
             $result->addThreat($this->getName(), $threat);
         }
-        
+
         return $result;
     }
-    
+
     public function checkBatch(array $urls): array
     {
-        // Implement batch checking for better performance
         $results = [];
         foreach ($urls as $url) {
             $results[$url] = $this->check($url);
@@ -189,19 +213,32 @@ use Qdenka\UltimateLinkChecker\UltimateLinkChecker;
 use Qdenka\UltimateLinkChecker\Provider\GoogleSafeBrowsingProvider;
 use Qdenka\UltimateLinkChecker\Cache\RedisCacheAdapter;
 use Qdenka\UltimateLinkChecker\Config\CheckerConfig;
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+
+// Create a PSR-3 logger
+$logger = new Logger('link-checker');
+$logger->pushHandler(new StreamHandler('path/to/your.log'));
 
 // Create a configuration
 $config = new CheckerConfig();
 $config->setCacheAdapter(new RedisCacheAdapter($redisClient));
 $config->setCacheTtl(3600); // Cache results for 1 hour
 $config->setTimeout(5.0); // 5 second timeout for API calls
-$config->setRetries(2); // Retry API calls twice
+$config->setRetries(2); // Retry failed API calls twice
+$config->setLogger($logger); // PSR-3 logger
 
 // Create checker with config
 $checker = new UltimateLinkChecker($config);
-$checker->addProvider(new GoogleSafeBrowsingProvider('api-key'));
 
-// Now all checks will use the configured cache and timeout settings
+// Create providers with timeout/retries from config
+$checker->addProvider(new GoogleSafeBrowsingProvider(
+    apiKey: 'api-key',
+    timeout: $config->getTimeout(),
+    retries: $config->getRetries()
+));
+
+// Now all checks will use the configured cache, timeout, and logging settings
 ```
 
 ## Contributing

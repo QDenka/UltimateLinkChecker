@@ -4,13 +4,17 @@ declare(strict_types=1);
 
 namespace Qdenka\UltimateLinkChecker;
 
+use Psr\Log\LoggerInterface;
 use Qdenka\UltimateLinkChecker\Config\CheckerConfig;
 use Qdenka\UltimateLinkChecker\Contract\ProviderInterface;
 use Qdenka\UltimateLinkChecker\Exception\InvalidArgumentException;
 use Qdenka\UltimateLinkChecker\Exception\ProviderNotFoundException;
 use Qdenka\UltimateLinkChecker\Result\AggregateResult;
 use Qdenka\UltimateLinkChecker\Result\CheckResult;
+use React\Promise\Deferred;
 use React\Promise\PromiseInterface;
+
+use function React\Promise\all;
 
 final class UltimateLinkChecker
 {
@@ -21,9 +25,12 @@ final class UltimateLinkChecker
     /** @var array<string, ProviderInterface> */
     private array $providers = [];
 
+    private LoggerInterface $logger;
+
     public function __construct(
         private readonly CheckerConfig $config = new CheckerConfig(),
     ) {
+        $this->logger = $this->config->getLogger();
     }
 
     /**
@@ -95,8 +102,22 @@ final class UltimateLinkChecker
         $result = new AggregateResult($url);
 
         foreach ($providers as $providerName => $provider) {
-            $providerResult = $this->checkWithProvider($provider, $url);
-            $result->addProviderResult($providerName, $providerResult);
+            $this->logger->debug('Checking URL with provider', [
+                'provider' => $providerName,
+                'url' => $url,
+            ]);
+
+            try {
+                $providerResult = $this->checkWithProvider($provider, $url);
+                $result->addProviderResult($providerName, $providerResult);
+            } catch (\Throwable $e) {
+                $this->logger->error('Provider check failed', [
+                    'provider' => $providerName,
+                    'url' => $url,
+                    'error' => $e->getMessage(),
+                ]);
+                throw $e;
+            }
         }
 
         $result->determineOverallSafety($consensus);
@@ -131,21 +152,56 @@ final class UltimateLinkChecker
     }
 
     /**
-     * Check a URL asynchronously
+     * Check a URL asynchronously using React\Promise.
+     * Each provider check runs in its own deferred promise.
      *
+     * @param string $url
      * @param array<string>|null $providerNames
-     *
-     * @return PromiseInterface<CheckResult>
+     * @param string $consensus
+     * @return PromiseInterface<AggregateResult>
      */
     public function checkAsync(
         string $url,
         ?array $providerNames = null,
         string $consensus = self::CONSENSUS_ANY
     ): PromiseInterface {
-        // The actual implementation would use promises and async requests
-        // This is a simplified version that returns a promise that resolves immediately
+        $this->validateProviders($providerNames);
+        $this->validateConsensus($consensus);
 
-        return \React\Promise\resolve($this->check($url, $providerNames, $consensus));
+        $providers = $this->resolveProviders($providerNames);
+        $providerPromises = [];
+
+        foreach ($providers as $providerName => $provider) {
+            $deferred = new Deferred();
+
+            try {
+                $providerResult = $this->checkWithProvider($provider, $url);
+                $deferred->resolve([$providerName, $providerResult]);
+            } catch (\Throwable $e) {
+                $this->logger->error('Async provider check failed', [
+                    'provider' => $providerName,
+                    'url' => $url,
+                    'error' => $e->getMessage(),
+                ]);
+                $deferred->reject($e);
+            }
+
+            $providerPromises[] = $deferred->promise();
+        }
+
+        return all($providerPromises)->then(
+            function (array $resolvedResults) use ($url, $consensus): AggregateResult {
+                $aggregateResult = new AggregateResult($url);
+
+                foreach ($resolvedResults as [$providerName, $checkResult]) {
+                    $aggregateResult->addProviderResult($providerName, $checkResult);
+                }
+
+                $aggregateResult->determineOverallSafety($consensus);
+
+                return $aggregateResult;
+            }
+        );
     }
 
     /**
@@ -153,7 +209,8 @@ final class UltimateLinkChecker
      *
      * @param array<string> $urls
      * @param array<string>|null $providerNames
-     * @return array<string, PromiseInterface>
+     * @param string $consensus
+     * @return array<string, PromiseInterface<AggregateResult>>
      */
     public function checkBatchAsync(
         array $urls,
@@ -170,7 +227,7 @@ final class UltimateLinkChecker
     }
 
     /**
-     * Check a URL with a specific provider
+     * Check a URL with a specific provider, utilizing cache and retry from config.
      *
      * @param ProviderInterface $provider
      * @param string $url
@@ -185,6 +242,10 @@ final class UltimateLinkChecker
             $cached = $this->config->getCacheAdapter()?->get($cacheKey);
 
             if ($cached instanceof CheckResult) {
+                $this->logger->debug('Cache hit', [
+                    'provider' => $provider->getName(),
+                    'url' => $url,
+                ]);
                 return $cached;
             }
         }
