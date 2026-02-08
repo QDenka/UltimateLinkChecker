@@ -24,13 +24,17 @@ final class VirusTotalProvider extends AbstractProvider
         string $apiKey,
         ?ClientInterface $httpClient = null,
         ?RequestFactoryInterface $requestFactory = null,
-        ?StreamFactoryInterface $streamFactory = null
+        ?StreamFactoryInterface $streamFactory = null,
+        float $timeout = 5.0,
+        int $retries = 1
     ) {
         parent::__construct(
             $apiKey,
-            $httpClient ?? new Client(),
+            $httpClient ?? new Client(['timeout' => $timeout]),
             $requestFactory ?? new HttpFactory(),
-            $streamFactory ?? new HttpFactory()
+            $streamFactory ?? new HttpFactory(),
+            $timeout,
+            $retries
         );
     }
 
@@ -46,8 +50,6 @@ final class VirusTotalProvider extends AbstractProvider
      * @param string $url
      * @return CheckResult
      * @throws ProviderException
-     * @throws \JsonException
-     * @throws ClientExceptionInterface
      */
     public function check(string $url): CheckResult
     {
@@ -55,28 +57,30 @@ final class VirusTotalProvider extends AbstractProvider
         $result = $this->createResult($normalizedUrl);
 
         try {
-            $urlId = $this->submitUrl($normalizedUrl);
-            $analysisResult = $this->getAnalysisResults($urlId);
+            return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
+                $urlId = $this->submitUrl($normalizedUrl);
+                $analysisResult = $this->getAnalysisResults($urlId);
 
-            // Process analysis results
-            if ($analysisResult['data']['attributes']['stats']['malicious'] > 0 ||
-                $analysisResult['data']['attributes']['stats']['suspicious'] > 0) {
+                if ($analysisResult['data']['attributes']['stats']['malicious'] > 0 ||
+                    $analysisResult['data']['attributes']['stats']['suspicious'] > 0) {
 
-                // Add threat information
-                $threat = new Threat(
-                    type: 'MALICIOUS_URL',
-                    platform: 'ANY_PLATFORM',
-                    description: $this->buildThreatDescription($analysisResult),
-                    url: $normalizedUrl,
-                    metadata: [
-                        'stats' => $analysisResult['data']['attributes']['stats'],
-                        'analysis_date' => $analysisResult['data']['attributes']['last_analysis_date'] ?? null,
-                        'vendors' => $this->extractMaliciousVendors($analysisResult)
-                    ]
-                );
+                    $threat = new Threat(
+                        type: 'MALICIOUS_URL',
+                        platform: 'ANY_PLATFORM',
+                        description: $this->buildThreatDescription($analysisResult),
+                        url: $normalizedUrl,
+                        metadata: [
+                            'stats' => $analysisResult['data']['attributes']['stats'],
+                            'analysis_date' => $analysisResult['data']['attributes']['last_analysis_date'] ?? null,
+                            'vendors' => $this->extractMaliciousVendors($analysisResult)
+                        ]
+                    );
 
-                $result->addThreat($this->getName(), $threat);
-            }
+                    $result->addThreat($this->getName(), $threat);
+                }
+
+                return $result;
+            });
         } catch (GuzzleException $e) {
             throw new ProviderException(
                 sprintf('Error checking URL with VirusTotal: %s', $e->getMessage()),
@@ -84,8 +88,6 @@ final class VirusTotalProvider extends AbstractProvider
                 $e
             );
         }
-
-        return $result;
     }
 
     /**
@@ -132,7 +134,7 @@ final class VirusTotalProvider extends AbstractProvider
     }
 
     /**
-     * @param array $analysisResult
+     * @param array<string, mixed> $analysisResult
      * @return string
      */
     private function buildThreatDescription(array $analysisResult): string
@@ -158,8 +160,8 @@ final class VirusTotalProvider extends AbstractProvider
     }
 
     /**
-     * @param array $analysisResult
-     * @return array
+     * @param array<string, mixed> $analysisResult
+     * @return array<string>
      */
     private function extractMaliciousVendors(array $analysisResult): array
     {

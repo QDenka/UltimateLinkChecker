@@ -23,13 +23,17 @@ final class PhishTankProvider extends AbstractProvider
         string $apiKey,
         ?ClientInterface $httpClient = null,
         ?RequestFactoryInterface $requestFactory = null,
-        ?StreamFactoryInterface $streamFactory = null
+        ?StreamFactoryInterface $streamFactory = null,
+        float $timeout = 5.0,
+        int $retries = 1
     ) {
         parent::__construct(
             $apiKey,
-            $httpClient ?? new Client(),
+            $httpClient ?? new Client(['timeout' => $timeout]),
             $requestFactory ?? new HttpFactory(),
-            $streamFactory ?? new HttpFactory()
+            $streamFactory ?? new HttpFactory(),
+            $timeout,
+            $retries
         );
     }
 
@@ -45,8 +49,6 @@ final class PhishTankProvider extends AbstractProvider
      * @param string $url
      * @return CheckResult
      * @throws ProviderException
-     * @throws \JsonException
-     * @throws \Psr\Http\Client\ClientExceptionInterface
      */
     public function check(string $url): CheckResult
     {
@@ -54,25 +56,27 @@ final class PhishTankProvider extends AbstractProvider
         $result = $this->createResult($normalizedUrl);
 
         try {
-            $formData = [
-                'url' => $normalizedUrl,
-                'api_key' => $this->apiKey,
-                'format' => 'json'
-            ];
+            return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
+                $formData = [
+                    'url' => $normalizedUrl,
+                    'api_key' => $this->apiKey,
+                    'format' => 'json'
+                ];
 
-            $request = $this->requestFactory->createRequest('POST', self::API_URL)
-                ->withHeader('Content-Type', 'application/x-www-form-urlencoded')
-                ->withHeader('User-Agent', 'UltimateLinkChecker/1.0');
+                $request = $this->requestFactory->createRequest('POST', self::API_URL)
+                    ->withHeader('Content-Type', 'application/x-www-form-urlencoded')
+                    ->withHeader('User-Agent', 'UltimateLinkChecker/1.0');
 
-            $request = $request->withBody(
-                $this->streamFactory->createStream(http_build_query($formData))
-            );
+                $request = $request->withBody(
+                    $this->streamFactory->createStream(http_build_query($formData))
+                );
 
-            $response = $this->httpClient->sendRequest($request);
-            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+                $response = $this->httpClient->sendRequest($request);
+                $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-            if (isset($data['results']['in_database']) && $data['results']['in_database'] === true) {
-                if (isset($data['results']['phish_detail_page']) && $data['results']['phish']) {
+                if (isset($data['results']['in_database']) && $data['results']['in_database'] === true
+                    && !empty($data['results']['phish'])
+                ) {
                     $threat = new Threat(
                         type: 'PHISHING',
                         platform: 'ANY_PLATFORM',
@@ -88,7 +92,9 @@ final class PhishTankProvider extends AbstractProvider
 
                     $result->addThreat($this->getName(), $threat);
                 }
-            }
+
+                return $result;
+            });
         } catch (GuzzleException $e) {
             throw new ProviderException(
                 sprintf('Error checking URL with PhishTank: %s', $e->getMessage()),
@@ -96,7 +102,5 @@ final class PhishTankProvider extends AbstractProvider
                 $e
             );
         }
-
-        return $result;
     }
 }

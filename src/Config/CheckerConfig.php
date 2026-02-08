@@ -4,39 +4,22 @@ declare(strict_types=1);
 
 namespace Qdenka\UltimateLinkChecker\Config;
 
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Psr\SimpleCache\CacheInterface;
-use Qdenka\UltimateLinkChecker\Cache\NullCacheAdapter;
 
 final class CheckerConfig
 {
-    /**
-     * @var CacheInterface|NullCacheAdapter|null
-     */
-    private CacheInterface|NullCacheAdapter|null $cacheAdapter = null;
-    /**
-     * @var int
-     */
+    private ?CacheInterface $cacheAdapter = null;
     private int $cacheTtl = 3600;
-    /**
-     * @var bool
-     */
     private bool $cacheEnabled = false;
-    /**
-     * @var float
-     */
     private float $timeout = 5.0;
-    /**
-     * @var int
-     */
     private int $retries = 1;
-    /**
-     * @var bool
-     */
-    private bool $logEnabled = false;
+    private LoggerInterface $logger;
 
     public function __construct()
     {
-        $this->cacheAdapter = new NullCacheAdapter();
+        $this->logger = new NullLogger();
     }
 
     /**
@@ -136,21 +119,21 @@ final class CheckerConfig
     }
 
     /**
-     * @param bool $enabled
+     * @param LoggerInterface $logger
      * @return $this
      */
-    public function enableLog(bool $enabled = true): self
+    public function setLogger(LoggerInterface $logger): self
     {
-        $this->logEnabled = $enabled;
+        $this->logger = $logger;
 
         return $this;
     }
 
     /**
-     * @return bool
+     * @return LoggerInterface
      */
-    public function isLogEnabled(): bool
+    public function getLogger(): LoggerInterface
     {
-        return $this->logEnabled;
+        return $this->logger;
     }
 }

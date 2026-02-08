@@ -23,13 +23,17 @@ final class IPQualityScoreProvider extends AbstractProvider
         string $apiKey,
         ?ClientInterface $httpClient = null,
         ?RequestFactoryInterface $requestFactory = null,
-        ?StreamFactoryInterface $streamFactory = null
+        ?StreamFactoryInterface $streamFactory = null,
+        float $timeout = 5.0,
+        int $retries = 1
     ) {
         parent::__construct(
             $apiKey,
-            $httpClient ?? new Client(),
+            $httpClient ?? new Client(['timeout' => $timeout]),
             $requestFactory ?? new HttpFactory(),
-            $streamFactory ?? new HttpFactory()
+            $streamFactory ?? new HttpFactory(),
+            $timeout,
+            $retries
         );
     }
 
@@ -45,8 +49,6 @@ final class IPQualityScoreProvider extends AbstractProvider
      * @param string $url
      * @return CheckResult
      * @throws ProviderException
-     * @throws \JsonException
-     * @throws \Psr\Http\Client\ClientExceptionInterface
      */
     public function check(string $url): CheckResult
     {
@@ -54,37 +56,41 @@ final class IPQualityScoreProvider extends AbstractProvider
         $result = $this->createResult($normalizedUrl);
 
         try {
-            $apiUrl = sprintf(self::API_URL, $this->apiKey, urlencode($normalizedUrl));
-            $request = $this->requestFactory->createRequest('GET', $apiUrl);
-            $response = $this->httpClient->sendRequest($request);
+            return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
+                $apiUrl = sprintf(self::API_URL, $this->apiKey, urlencode($normalizedUrl));
+                $request = $this->requestFactory->createRequest('GET', $apiUrl);
+                $response = $this->httpClient->sendRequest($request);
 
-            $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+                $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-            if (!isset($data['success']) || $data['success'] !== true) {
-                throw new ProviderException(
-                    sprintf('IPQualityScore API error: %s', $data['message'] ?? 'Unknown error')
-                );
-            }
+                if (!isset($data['success']) || $data['success'] !== true) {
+                    throw new ProviderException(
+                        sprintf('IPQualityScore API error: %s', $data['message'] ?? 'Unknown error')
+                    );
+                }
 
-            $isSuspicious = $data['suspicious'] ?? false;
-            $isPhishing = $data['phishing'] ?? false;
-            $isMalware = $data['malware'] ?? false;
-            $isSpamming = $data['spamming'] ?? false;
-            $isUnsafe = $data['unsafe'] ?? false;
+                $isSuspicious = $data['suspicious'] ?? false;
+                $isPhishing = $data['phishing'] ?? false;
+                $isMalware = $data['malware'] ?? false;
+                $isSpamming = $data['spamming'] ?? false;
+                $isUnsafe = $data['unsafe'] ?? false;
 
-            if ($isSuspicious || $isPhishing || $isMalware || $isSpamming || $isUnsafe) {
-                $threatType = $this->determineThreatType($data);
+                if ($isSuspicious || $isPhishing || $isMalware || $isSpamming || $isUnsafe) {
+                    $threatType = $this->determineThreatType($data);
 
-                $threat = new Threat(
-                    type: $threatType,
-                    platform: 'ANY_PLATFORM',
-                    description: $this->getThreatDescription($threatType),
-                    url: $normalizedUrl,
-                    metadata: $data
-                );
+                    $threat = new Threat(
+                        type: $threatType,
+                        platform: 'ANY_PLATFORM',
+                        description: $this->getThreatDescription($threatType),
+                        url: $normalizedUrl,
+                        metadata: $data
+                    );
 
-                $result->addThreat($this->getName(), $threat);
-            }
+                    $result->addThreat($this->getName(), $threat);
+                }
+
+                return $result;
+            });
         } catch (GuzzleException $e) {
             throw new ProviderException(
                 sprintf('Error checking URL with IPQualityScore: %s', $e->getMessage()),
@@ -92,12 +98,13 @@ final class IPQualityScoreProvider extends AbstractProvider
                 $e
             );
         }
-
-        return $result;
     }
 
     /**
      * Determine the most severe threat type from the response
+     *
+     * @param array<string, mixed> $data
+     * @return string
      */
     private function determineThreatType(array $data): string
     {
@@ -126,6 +133,9 @@ final class IPQualityScoreProvider extends AbstractProvider
 
     /**
      * Get a human-readable description of the threat
+     *
+     * @param string $threatType
+     * @return string
      */
     private function getThreatDescription(string $threatType): string
     {

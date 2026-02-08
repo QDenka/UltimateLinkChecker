@@ -54,7 +54,11 @@ final class AggregateResult
     }
 
     /**
-     * Determine if the URL is safe based on the consensus method
+     * Determine if the URL is safe based on the consensus method.
+     *
+     * - 'any': URL is unsafe if ANY provider flags it (strictest) => safe only if ALL providers say safe
+     * - 'all': URL is unsafe only if ALL providers flag it (most lenient) => safe if at least one says safe
+     * - 'majority': URL is unsafe if the MAJORITY of providers flag it => safe if majority says safe
      */
     public function determineOverallSafety(string $consensusMethod): bool
     {
@@ -62,20 +66,20 @@ final class AggregateResult
             return true;
         }
 
-        $safeCount = 0;
+        $unsafeCount = 0;
         $totalCount = count($this->providerResults);
 
         foreach ($this->providerResults as $result) {
-            if ($result->isSafe()) {
-                $safeCount++;
+            if (!$result->isSafe()) {
+                $unsafeCount++;
             }
         }
 
         $this->isSafe = match ($consensusMethod) {
-            'any' => $safeCount > 0,
-            'all' => $safeCount === $totalCount,
-            'majority' => $safeCount > ($totalCount / 2),
-            default => $safeCount > 0,
+            'any' => $unsafeCount === 0,
+            'all' => $unsafeCount < $totalCount,
+            'majority' => $unsafeCount <= ($totalCount / 2),
+            default => $unsafeCount === 0,
         };
 
         return $this->isSafe;
