@@ -158,7 +158,7 @@ final class UltimateLinkChecker
      * @param string $url
      * @param array<string>|null $providerNames
      * @param string $consensus
-     * @return PromiseInterface<AggregateResult>
+     * @return PromiseInterface
      */
     public function checkAsync(
         string $url,
@@ -210,7 +210,7 @@ final class UltimateLinkChecker
      * @param array<string> $urls
      * @param array<string>|null $providerNames
      * @param string $consensus
-     * @return array<string, PromiseInterface<AggregateResult>>
+     * @return array<string, PromiseInterface>
      */
     public function checkBatchAsync(
         array $urls,

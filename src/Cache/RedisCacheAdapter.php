@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Qdenka\UltimateLinkChecker\Cache;
 
 use DateInterval;
+use DateTimeImmutable;
 use Psr\SimpleCache\CacheInterface;
 use Redis;
 
@@ -44,14 +45,18 @@ final class RedisCacheAdapter implements CacheInterface
         $serialized = serialize($value);
 
         if ($ttl === null) {
-            return $this->redis->set($prefixedKey, $serialized);
+            $result = $this->redis->set($prefixedKey, $serialized);
+
+            return (bool) $result;
         }
 
         if ($ttl instanceof DateInterval) {
             $ttl = $this->dateIntervalToSeconds($ttl);
         }
 
-        return $this->redis->setex($prefixedKey, $ttl, $serialized);
+        $result = $this->redis->setex($prefixedKey, $ttl, $serialized);
+
+        return (bool) $result;
     }
 
     /**
@@ -60,7 +65,9 @@ final class RedisCacheAdapter implements CacheInterface
      */
     public function delete(string $key): bool
     {
-        return $this->redis->del($this->getPrefixedKey($key)) > 0;
+        $result = $this->redis->del($this->getPrefixedKey($key));
+
+        return ((int) $result) > 0;
     }
 
     /**
@@ -74,7 +81,9 @@ final class RedisCacheAdapter implements CacheInterface
             return true;
         }
 
-        return $this->redis->del($keys) > 0;
+        $result = $this->redis->del($keys);
+
+        return ((int) $result) > 0;
     }
 
     /**
@@ -125,7 +134,9 @@ final class RedisCacheAdapter implements CacheInterface
             return true;
         }
 
-        return $this->redis->del($prefixedKeys) > 0;
+        $result = $this->redis->del($prefixedKeys);
+
+        return ((int) $result) > 0;
     }
 
     /**
@@ -134,7 +145,9 @@ final class RedisCacheAdapter implements CacheInterface
      */
     public function has(string $key): bool
     {
-        return $this->redis->exists($this->getPrefixedKey($key)) > 0;
+        $result = $this->redis->exists($this->getPrefixedKey($key));
+
+        return ((int) $result) > 0;
     }
 
     /**
@@ -152,7 +165,7 @@ final class RedisCacheAdapter implements CacheInterface
      */
     private function dateIntervalToSeconds(DateInterval $interval): int
     {
-        $reference = new \DateTimeImmutable();
+        $reference = new DateTimeImmutable();
         $endTime = $reference->add($interval);
 
         return $endTime->getTimestamp() - $reference->getTimestamp();
