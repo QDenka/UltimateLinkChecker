@@ -1,0 +1,10 @@
+parameters:
+    level: 6
+    paths:
+        - src
+    tmpDir: .phpstan-cache
+    checkMissingIterableValueType: false
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # Redis extension methods may not be recognized
+        - '#Call to method .+ on .+Redis#'
