@@ -40,6 +40,7 @@ final class UltimateLinkChecker
     public function addProvider(ProviderInterface $provider): self
     {
         $this->providers[$provider->getName()] = $provider;
+
         return $this;
     }
 
@@ -68,8 +69,8 @@ final class UltimateLinkChecker
      * Get a specific provider by name
      *
      * @param string $name
-     * @return ProviderInterface
      * @throws ProviderNotFoundException
+     * @return ProviderInterface
      */
     public function getProvider(string $name): ProviderInterface
     {
@@ -86,9 +87,9 @@ final class UltimateLinkChecker
      * @param string $url
      * @param array<string>|null $providerNames
      * @param string $consensus
-     * @return AggregateResult
      * @throws InvalidArgumentException
      * @throws ProviderNotFoundException
+     * @return AggregateResult
      */
     public function check(
         string $url,
@@ -116,6 +117,7 @@ final class UltimateLinkChecker
                     'url' => $url,
                     'error' => $e->getMessage(),
                 ]);
+
                 throw $e;
             }
         }
@@ -131,9 +133,9 @@ final class UltimateLinkChecker
      * @param array<string> $urls
      * @param array<string>|null $providerNames
      * @param string $consensus
-     * @return array<string, AggregateResult>
      * @throws InvalidArgumentException
      * @throws ProviderNotFoundException
+     * @return array<string, AggregateResult>
      */
     public function checkBatch(
         array $urls,
@@ -246,6 +248,7 @@ final class UltimateLinkChecker
                     'provider' => $provider->getName(),
                     'url' => $url,
                 ]);
+
                 return $cached;
             }
         }
@@ -280,8 +283,8 @@ final class UltimateLinkChecker
      * Resolve providers based on provider names
      *
      * @param array<string>|null $providerNames
-     * @return array<string, ProviderInterface>
      * @throws ProviderNotFoundException
+     * @return array<string, ProviderInterface>
      */
     private function resolveProviders(?array $providerNames = null): array
     {

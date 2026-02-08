@@ -47,8 +47,8 @@ final class PhishTankProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -57,36 +57,36 @@ final class PhishTankProvider extends AbstractProvider
 
         try {
             return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
-                $formData = [
+                $body = http_build_query([
                     'url' => $normalizedUrl,
-                    'api_key' => $this->apiKey,
-                    'format' => 'json'
-                ];
+                    'format' => 'json',
+                    'app_key' => $this->apiKey
+                ]);
 
                 $request = $this->requestFactory->createRequest('POST', self::API_URL)
-                    ->withHeader('Content-Type', 'application/x-www-form-urlencoded')
-                    ->withHeader('User-Agent', 'UltimateLinkChecker/1.0');
+                    ->withHeader('Content-Type', 'application/x-www-form-urlencoded');
 
                 $request = $request->withBody(
-                    $this->streamFactory->createStream(http_build_query($formData))
+                    $this->streamFactory->createStream($body)
                 );
 
                 $response = $this->httpClient->sendRequest($request);
                 $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-                if (isset($data['results']['in_database']) && $data['results']['in_database'] === true
-                    && !empty($data['results']['phish'])
-                ) {
+                if (isset($data['results']['in_database']) && $data['results']['in_database'] === true) {
                     $threat = new Threat(
                         type: 'PHISHING',
                         platform: 'ANY_PLATFORM',
-                        description: 'This URL was identified as a phishing site by PhishTank',
+                        description: sprintf(
+                            'This URL has been identified as a phishing site by PhishTank. Verified: %s',
+                            isset($data['results']['verified']) && $data['results']['verified'] ? 'Yes' : 'No'
+                        ),
                         url: $normalizedUrl,
                         metadata: [
                             'phish_id' => $data['results']['phish_id'] ?? null,
                             'verified' => $data['results']['verified'] ?? false,
                             'verified_at' => $data['results']['verified_at'] ?? null,
-                            'phish_detail_url' => $data['results']['phish_detail_page'] ?? null
+                            'valid' => $data['results']['valid'] ?? false
                         ]
                     );
 

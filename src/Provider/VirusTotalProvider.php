@@ -48,8 +48,8 @@ final class VirusTotalProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -92,10 +92,10 @@ final class VirusTotalProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return string
      * @throws ClientExceptionInterface
      * @throws ProviderException
      * @throws \JsonException
+     * @return string
      */
     private function submitUrl(string $url): string
     {
@@ -119,9 +119,9 @@ final class VirusTotalProvider extends AbstractProvider
 
     /**
      * @param string $urlId
-     * @return array<string, mixed>
      * @throws \JsonException
      * @throws ClientExceptionInterface
+     * @return array<string, mixed>
      */
     private function getAnalysisResults(string $urlId): array
     {

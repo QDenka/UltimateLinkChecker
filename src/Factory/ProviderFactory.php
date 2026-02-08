@@ -22,8 +22,8 @@ final class ProviderFactory
      * @param string $apiKey
      * @param float $timeout
      * @param int $retries
-     * @return ProviderInterface
      * @throws InvalidArgumentException
+     * @return ProviderInterface
      */
     public static function createProvider(
         string $name,
@@ -40,26 +40,7 @@ final class ProviderFactory
             'facebook' => new FacebookProvider($apiKey, timeout: $timeout, retries: $retries),
             'opswat' => new OPSWATProvider($apiKey, timeout: $timeout, retries: $retries),
             'cisco_talos' => new CiscoTalosProvider($apiKey, timeout: $timeout, retries: $retries),
-            default => throw new InvalidArgumentException(sprintf('Unknown provider "%s"', $name)),
+            default => throw new InvalidArgumentException(sprintf('Unknown provider: %s', $name)),
         };
-    }
-
-    /**
-     * Get a list of available provider names
-     *
-     * @return array<string>
-     */
-    public static function getAvailableProviders(): array
-    {
-        return [
-            'google_safebrowsing',
-            'yandex_safebrowsing',
-            'virustotal',
-            'phishtank',
-            'ipqualityscore',
-            'facebook',
-            'opswat',
-            'cisco_talos',
-        ];
     }
 }

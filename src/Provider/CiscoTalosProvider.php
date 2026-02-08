@@ -16,14 +16,14 @@ use Qdenka\UltimateLinkChecker\Result\CheckResult;
 use Qdenka\UltimateLinkChecker\Result\Threat;
 
 /**
- * Cisco Talos Intelligence provider.
+ * Cisco Talos Intelligence URL reputation provider.
  *
- * Uses the Cisco Talos reputation lookup API to check URL/domain reputation.
+ * Uses the Cisco Talos API to check domain/URL reputation.
  * Requires a valid Cisco Talos API key.
  */
 final class CiscoTalosProvider extends AbstractProvider
 {
-    private const API_URL = 'https://talosintelligence.com/api/v2/url/reputation';
+    private const API_URL = 'https://cloud-intel.api.cisco.com/v1/url/reputation';
 
     public function __construct(
         string $apiKey,
@@ -53,8 +53,8 @@ final class CiscoTalosProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -63,13 +63,12 @@ final class CiscoTalosProvider extends AbstractProvider
 
         try {
             return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
-                $domain = $this->extractDomain($normalizedUrl);
-
+                $domain = parse_url($normalizedUrl, PHP_URL_HOST) ?: $normalizedUrl;
                 $payload = json_encode(['url' => $domain], JSON_THROW_ON_ERROR);
 
                 $request = $this->requestFactory->createRequest('POST', self::API_URL)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withHeader('Authorization', 'Bearer ' . $this->apiKey);
+                    ->withHeader('Authorization', 'Bearer ' . $this->apiKey)
+                    ->withHeader('Content-Type', 'application/json');
 
                 $request = $request->withBody(
                     $this->streamFactory->createStream($payload)
@@ -78,7 +77,55 @@ final class CiscoTalosProvider extends AbstractProvider
                 $response = $this->httpClient->sendRequest($request);
                 $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-                $this->processResults($data, $normalizedUrl, $result);
+                $reputation = $data['reputation'] ?? $data['web_reputation'] ?? null;
+
+                $isMalicious = false;
+                $threatCategories = [];
+
+                if (is_array($reputation)) {
+                    $score = $reputation['score'] ?? $reputation['threat_score'] ?? null;
+                    // Talos scores: negative = bad reputation
+                    if ($score !== null && $score < -5) {
+                        $isMalicious = true;
+                    }
+
+                    $categories = $reputation['categories'] ?? $data['categories'] ?? [];
+                    $dangerousCategories = [
+                        'malware', 'phishing', 'botnet', 'spam',
+                        'suspicious', 'untrusted', 'compromised',
+                    ];
+
+                    foreach ($categories as $category) {
+                        $categoryName = is_array($category) ? ($category['name'] ?? '') : (string) $category;
+                        if (in_array(strtolower($categoryName), $dangerousCategories, true)) {
+                            $isMalicious = true;
+                            $threatCategories[] = $categoryName;
+                        }
+                    }
+                } elseif (is_numeric($reputation)) {
+                    if ((float) $reputation < -5) {
+                        $isMalicious = true;
+                    }
+                }
+
+                if ($isMalicious) {
+                    $threat = new Threat(
+                        type: !empty($threatCategories) ? strtoupper($threatCategories[0]) : 'MALICIOUS_REPUTATION',
+                        platform: 'ANY_PLATFORM',
+                        description: sprintf(
+                            'This URL/domain has a poor reputation score on Cisco Talos%s',
+                            !empty($threatCategories) ? ': ' . implode(', ', $threatCategories) : ''
+                        ),
+                        url: $normalizedUrl,
+                        metadata: [
+                            'domain' => $domain,
+                            'reputation' => $reputation,
+                            'categories' => $threatCategories,
+                        ]
+                    );
+
+                    $result->addThreat($this->getName(), $threat);
+                }
 
                 return $result;
             });
@@ -89,107 +136,5 @@ final class CiscoTalosProvider extends AbstractProvider
                 $e
             );
         }
-    }
-
-    /**
-     * Process Cisco Talos API results and add threats if found.
-     *
-     * @param array<string, mixed> $data
-     * @param string $url
-     * @param CheckResult $result
-     */
-    private function processResults(array $data, string $url, CheckResult $result): void
-    {
-        $reputation = $data['reputation'] ?? null;
-        $categories = $data['categories'] ?? [];
-
-        // Cisco Talos reputation: "poor" or "very_poor" means dangerous
-        $dangerousReputations = ['poor', 'very_poor', 'untrusted'];
-        $dangerousCategories = [
-            'malware', 'phishing', 'spam', 'botnets',
-            'exploit_kit', 'ransomware', 'cryptomining'
-        ];
-
-        $isDangerous = in_array(strtolower((string) $reputation), $dangerousReputations, true);
-
-        $matchedCategories = [];
-        foreach ($categories as $category) {
-            $categoryName = strtolower(is_array($category) ? ($category['name'] ?? '') : (string) $category);
-            if (in_array($categoryName, $dangerousCategories, true)) {
-                $matchedCategories[] = $categoryName;
-                $isDangerous = true;
-            }
-        }
-
-        if ($isDangerous) {
-            $threatType = $this->determineThreatType($matchedCategories, (string) $reputation);
-
-            $threat = new Threat(
-                type: $threatType,
-                platform: 'ANY_PLATFORM',
-                description: sprintf(
-                    'Cisco Talos rates this URL with reputation "%s"%s',
-                    $reputation ?? 'unknown',
-                    !empty($matchedCategories) ? ' (categories: ' . implode(', ', $matchedCategories) . ')' : ''
-                ),
-                url: $url,
-                metadata: [
-                    'reputation' => $reputation,
-                    'categories' => $categories,
-                    'matched_categories' => $matchedCategories,
-                ]
-            );
-
-            $result->addThreat($this->getName(), $threat);
-        }
-    }
-
-    /**
-     * Determine the primary threat type from matched categories.
-     *
-     * @param array<string> $categories
-     * @param string $reputation
-     * @return string
-     */
-    private function determineThreatType(array $categories, string $reputation): string
-    {
-        if (in_array('malware', $categories, true) || in_array('ransomware', $categories, true)) {
-            return 'MALWARE';
-        }
-
-        if (in_array('phishing', $categories, true)) {
-            return 'PHISHING';
-        }
-
-        if (in_array('spam', $categories, true)) {
-            return 'SPAM';
-        }
-
-        if (in_array('botnets', $categories, true)) {
-            return 'BOTNET';
-        }
-
-        if (in_array('exploit_kit', $categories, true)) {
-            return 'EXPLOIT_KIT';
-        }
-
-        if (in_array('cryptomining', $categories, true)) {
-            return 'CRYPTOMINING';
-        }
-
-        return 'UNTRUSTED';
-    }
-
-    /**
-     * Extract domain from URL.
-     *
-     * @param string $url
-     * @return string
-     */
-    private function extractDomain(string $url): string
-    {
-        $parsed = parse_url($url);
-
-        return $parsed['host'] ?? $url;
     }
 }

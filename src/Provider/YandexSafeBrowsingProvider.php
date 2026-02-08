@@ -47,8 +47,8 @@ final class YandexSafeBrowsingProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -57,25 +57,45 @@ final class YandexSafeBrowsingProvider extends AbstractProvider
 
         try {
             return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
-                $payload = $this->buildRequestPayload([$normalizedUrl]);
-                $request = $this->requestFactory->createRequest('POST', self::API_URL)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withHeader('Authorization', 'ApiKey ' . $this->apiKey);
+                $payload = json_encode([
+                    'client' => [
+                        'clientId' => 'ultimatelinkchecker',
+                        'clientVersion' => '1.0.0'
+                    ],
+                    'threatInfo' => [
+                        'threatTypes' => [
+                            'MALWARE',
+                            'SOCIAL_ENGINEERING',
+                            'UNWANTED_SOFTWARE',
+                        ],
+                        'platformTypes' => ['ANY_PLATFORM'],
+                        'threatEntryTypes' => ['URL'],
+                        'threatEntries' => [
+                            ['url' => $normalizedUrl]
+                        ]
+                    ]
+                ], JSON_THROW_ON_ERROR);
+
+                $request = $this->requestFactory->createRequest('POST', self::API_URL . '?key=' . $this->apiKey)
+                    ->withHeader('Content-Type', 'application/json');
 
                 $request = $request->withBody(
-                    $this->streamFactory->createStream(json_encode($payload, JSON_THROW_ON_ERROR))
+                    $this->streamFactory->createStream($payload)
                 );
 
                 $response = $this->httpClient->sendRequest($request);
                 $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-                if (isset($data['matches']) && is_array($data['matches'])) {
+                if (!empty($data['matches'])) {
                     foreach ($data['matches'] as $match) {
                         $threat = new Threat(
                             type: $match['threatType'] ?? 'UNKNOWN',
                             platform: $match['platformType'] ?? 'ANY_PLATFORM',
-                            description: $this->getThreatDescription($match['threatType'] ?? 'UNKNOWN'),
-                            url: $match['threat']['url'] ?? $normalizedUrl,
+                            description: sprintf(
+                                'This URL has been flagged by Yandex Safe Browsing as %s',
+                                $match['threatType'] ?? 'UNKNOWN'
+                            ),
+                            url: $normalizedUrl,
                             metadata: $match
                         );
 
@@ -92,50 +112,5 @@ final class YandexSafeBrowsingProvider extends AbstractProvider
                 $e
             );
         }
-    }
-
-    /**
-     * @param array<string> $urls
-     * @return array<string, mixed>
-     */
-    private function buildRequestPayload(array $urls): array
-    {
-        $threatEntries = [];
-        foreach ($urls as $url) {
-            $threatEntries[] = ['url' => $url];
-        }
-
-        return [
-            'client' => [
-                'clientId' => 'ultimatelinkchecker',
-                'clientVersion' => '1.0.0'
-            ],
-            'threatInfo' => [
-                'threatTypes' => [
-                    'MALWARE',
-                    'SOCIAL_ENGINEERING',
-                    'UNWANTED_SOFTWARE',
-                    'HARMFUL_DOWNLOAD'
-                ],
-                'platformTypes' => ['ANY_PLATFORM'],
-                'threatEntryTypes' => ['URL'],
-                'threatEntries' => $threatEntries
-            ]
-        ];
-    }
-
-    /**
-     * @param string $threatType
-     * @return string
-     */
-    private function getThreatDescription(string $threatType): string
-    {
-        return match ($threatType) {
-            'MALWARE' => 'This URL contains malware according to Yandex',
-            'SOCIAL_ENGINEERING' => 'This URL contains phishing or social engineering content according to Yandex',
-            'UNWANTED_SOFTWARE' => 'This URL contains unwanted software according to Yandex',
-            'HARMFUL_DOWNLOAD' => 'This URL leads to harmful downloads according to Yandex',
-            default => 'This URL has been identified as unsafe by Yandex'
-        };
     }
 }
