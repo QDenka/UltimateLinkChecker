@@ -90,6 +90,6 @@ abstract class AbstractProvider implements ProviderInterface
      */
     protected function createResult(string $url): CheckResult
     {
-        return new CheckResult($url, $this->getName());
+        return new CheckResult($url);
     }
 }
