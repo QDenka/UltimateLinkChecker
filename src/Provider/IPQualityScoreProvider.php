@@ -17,7 +17,7 @@ use Qdenka\UltimateLinkChecker\Result\Threat;
 
 final class IPQualityScoreProvider extends AbstractProvider
 {
-    private const API_URL = 'https://ipqualityscore.com/api/json/url/%s/%s';
+    private const API_URL = 'https://www.ipqualityscore.com/api/json/url';
 
     public function __construct(
         string $apiKey,
@@ -47,8 +47,8 @@ final class IPQualityScoreProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -57,33 +57,50 @@ final class IPQualityScoreProvider extends AbstractProvider
 
         try {
             return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
-                $apiUrl = sprintf(self::API_URL, $this->apiKey, urlencode($normalizedUrl));
-                $request = $this->requestFactory->createRequest('GET', $apiUrl);
-                $response = $this->httpClient->sendRequest($request);
+                $request = $this->requestFactory->createRequest(
+                    'GET',
+                    self::API_URL . '/' . $this->apiKey . '/' . urlencode($normalizedUrl)
+                );
 
+                $response = $this->httpClient->sendRequest($request);
                 $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-                if (!isset($data['success']) || $data['success'] !== true) {
-                    throw new ProviderException(
-                        sprintf('IPQualityScore API error: %s', $data['message'] ?? 'Unknown error')
-                    );
-                }
+                if (isset($data['unsafe']) && $data['unsafe'] === true) {
+                    $threatTypes = [];
 
-                $isSuspicious = $data['suspicious'] ?? false;
-                $isPhishing = $data['phishing'] ?? false;
-                $isMalware = $data['malware'] ?? false;
-                $isSpamming = $data['spamming'] ?? false;
-                $isUnsafe = $data['unsafe'] ?? false;
+                    if (!empty($data['phishing'])) {
+                        $threatTypes[] = 'PHISHING';
+                    }
 
-                if ($isSuspicious || $isPhishing || $isMalware || $isSpamming || $isUnsafe) {
-                    $threatType = $this->determineThreatType($data);
+                    if (!empty($data['malware'])) {
+                        $threatTypes[] = 'MALWARE';
+                    }
+
+                    if (!empty($data['suspicious'])) {
+                        $threatTypes[] = 'SUSPICIOUS';
+                    }
+
+                    if (!empty($data['spamming'])) {
+                        $threatTypes[] = 'SPAM';
+                    }
 
                     $threat = new Threat(
-                        type: $threatType,
+                        type: !empty($threatTypes) ? $threatTypes[0] : 'UNSAFE',
                         platform: 'ANY_PLATFORM',
-                        description: $this->getThreatDescription($threatType),
+                        description: sprintf(
+                            'This URL has been flagged as unsafe by IPQualityScore. Risk score: %d/100. Categories: %s',
+                            $data['risk_score'] ?? 0,
+                            implode(', ', $threatTypes) ?: 'UNSAFE'
+                        ),
                         url: $normalizedUrl,
-                        metadata: $data
+                        metadata: [
+                            'risk_score' => $data['risk_score'] ?? null,
+                            'domain' => $data['domain'] ?? null,
+                            'ip_address' => $data['ip_address'] ?? null,
+                            'categories' => $threatTypes,
+                            'adult' => $data['adult'] ?? false,
+                            'parking' => $data['parking'] ?? false,
+                        ]
                     );
 
                     $result->addThreat($this->getName(), $threat);
@@ -98,55 +115,5 @@ final class IPQualityScoreProvider extends AbstractProvider
                 $e
             );
         }
-    }
-
-    /**
-     * Determine the most severe threat type from the response
-     *
-     * @param array<string, mixed> $data
-     * @return string
-     */
-    private function determineThreatType(array $data): string
-    {
-        if ($data['malware'] ?? false) {
-            return 'MALWARE';
-        }
-
-        if ($data['phishing'] ?? false) {
-            return 'PHISHING';
-        }
-
-        if ($data['parking'] ?? false) {
-            return 'PARKING_DOMAIN';
-        }
-
-        if ($data['spamming'] ?? false) {
-            return 'SPAM';
-        }
-
-        if ($data['suspicious'] ?? false) {
-            return 'SUSPICIOUS';
-        }
-
-        return 'UNSAFE';
-    }
-
-    /**
-     * Get a human-readable description of the threat
-     *
-     * @param string $threatType
-     * @return string
-     */
-    private function getThreatDescription(string $threatType): string
-    {
-        return match ($threatType) {
-            'MALWARE' => 'This URL contains or distributes malware',
-            'PHISHING' => 'This URL is a phishing site designed to steal sensitive information',
-            'PARKING_DOMAIN' => 'This domain is parked and may contain misleading ads',
-            'SPAM' => 'This URL is associated with spam or unwanted communications',
-            'SUSPICIOUS' => 'This URL exhibits suspicious characteristics',
-            'UNSAFE' => 'This URL was identified as unsafe',
-            default => 'This URL was flagged as potentially harmful'
-        };
     }
 }

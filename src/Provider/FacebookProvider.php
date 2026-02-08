@@ -18,12 +18,12 @@ use Qdenka\UltimateLinkChecker\Result\Threat;
 /**
  * Facebook URL Security provider.
  *
- * Uses the Facebook Graph API to check URL sharing safety.
- * Requires a valid Facebook App access token (app_id|app_secret).
+ * Uses the Facebook Graph API v18.0 to check if a URL is safe for sharing.
+ * Requires a valid Facebook App access token.
  */
 final class FacebookProvider extends AbstractProvider
 {
-    private const API_URL = 'https://graph.facebook.com/v18.0/';
+    private const API_URL = 'https://graph.facebook.com/v18.0';
 
     public function __construct(
         string $apiKey,
@@ -53,8 +53,8 @@ final class FacebookProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -63,47 +63,50 @@ final class FacebookProvider extends AbstractProvider
 
         try {
             return $this->executeWithRetry(function () use ($normalizedUrl, $result): CheckResult {
-                $queryParams = http_build_query([
-                    'access_token' => $this->apiKey,
-                    'scrape' => 'true',
-                    'id' => $normalizedUrl,
-                ]);
+                $encodedUrl = urlencode($normalizedUrl);
+                $apiUrl = sprintf(
+                    '%s/?id=%s&scrape=true&access_token=%s',
+                    self::API_URL,
+                    $encodedUrl,
+                    $this->apiKey
+                );
 
-                $request = $this->requestFactory->createRequest('POST', self::API_URL . '?' . $queryParams)
-                    ->withHeader('Content-Type', 'application/x-www-form-urlencoded');
+                $request = $this->requestFactory->createRequest('POST', $apiUrl);
 
                 $response = $this->httpClient->sendRequest($request);
+                $statusCode = $response->getStatusCode();
                 $data = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-                // Facebook flags unsafe URLs in the 'og_object' or via error responses
-                if (isset($data['error'])) {
-                    $errorMessage = $data['error']['message'] ?? 'Unknown error';
+                // Facebook returns error for blocked/restricted URLs
+                if ($statusCode >= 400 || isset($data['error'])) {
+                    $errorMessage = $data['error']['message'] ?? 'URL blocked by Facebook';
+                    $errorCode = $data['error']['code'] ?? 0;
 
-                    // Error code 1 with specific messages indicates blocked/unsafe URL
-                    if ($this->isSecurityError($data['error'])) {
+                    // Error code 100 with specific subcode indicates URL restriction
+                    $isBlocked = ($errorCode === 100) ||
+                        str_contains(strtolower($errorMessage), 'blocked') ||
+                        str_contains(strtolower($errorMessage), 'restricted') ||
+                        str_contains(strtolower($errorMessage), 'spam') ||
+                        str_contains(strtolower($errorMessage), 'unsafe');
+
+                    if ($isBlocked) {
                         $threat = new Threat(
                             type: 'BLOCKED_URL',
                             platform: 'FACEBOOK',
-                            description: sprintf('This URL is blocked by Facebook: %s', $errorMessage),
+                            description: sprintf(
+                                'This URL is blocked or restricted on Facebook: %s',
+                                $errorMessage
+                            ),
                             url: $normalizedUrl,
-                            metadata: $data['error']
+                            metadata: [
+                                'error_code' => $errorCode,
+                                'error_subcode' => $data['error']['error_subcode'] ?? null,
+                                'error_message' => $errorMessage,
+                            ]
                         );
 
                         $result->addThreat($this->getName(), $threat);
                     }
-                }
-
-                // Check if the share is restricted
-                if (isset($data['share']) && isset($data['share']['error'])) {
-                    $threat = new Threat(
-                        type: 'RESTRICTED_URL',
-                        platform: 'FACEBOOK',
-                        description: 'This URL has sharing restrictions on Facebook',
-                        url: $normalizedUrl,
-                        metadata: $data['share']
-                    );
-
-                    $result->addThreat($this->getName(), $threat);
                 }
 
                 return $result;
@@ -115,29 +118,5 @@ final class FacebookProvider extends AbstractProvider
                 $e
             );
         }
-    }
-
-    /**
-     * Determine if a Facebook API error indicates a security issue.
-     *
-     * @param array<string, mixed> $error
-     * @return bool
-     */
-    private function isSecurityError(array $error): bool
-    {
-        $securityKeywords = ['spam', 'abuse', 'malicious', 'unsafe', 'blocked', 'restricted'];
-        $message = strtolower($error['message'] ?? '');
-
-        foreach ($securityKeywords as $keyword) {
-            if (str_contains($message, $keyword)) {
-                return true;
-            }
-        }
-
-        // Facebook error code 368 = temporarily blocked for policies
-        // Facebook error code 1609005 = link blocked
-        $blockedCodes = [368, 1609005];
-
-        return in_array($error['code'] ?? 0, $blockedCodes, true);
     }
 }

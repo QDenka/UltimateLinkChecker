@@ -1,0 +1,24 @@
+parameters:
+    level: 6
+    paths:
+        - src
+    tmpDir: .phpstan-cache
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # Missing iterable value type (too noisy at level 6)
+        -
+            identifier: missingType.iterableValue
+        # Redis extension return types include Redis|int|false union
+        -
+            message: '#Comparison operation .+ between \(int\|Redis\|false\) and 0#'
+            paths:
+                - src/Cache/RedisCacheAdapter.php
+        -
+            message: '#Comparison operation .+ between \(bool\|int\|Redis\) and 0#'
+            paths:
+                - src/Cache/RedisCacheAdapter.php
+        # React\Promise\PromiseInterface generic varies between v2 (not generic) and v3 (generic)
+        -
+            message: '#generic interface React\\Promise\\PromiseInterface#'
+            paths:
+                - src/UltimateLinkChecker.php

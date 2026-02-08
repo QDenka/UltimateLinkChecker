@@ -1,1 +1,19 @@
 /vendor/
+composer.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Build artifacts
+coverage.xml
+coverage-html/
+.phpunit.cache/
+.phpstan-cache/
+.php-cs-fixer.cache
+
+# OS files
+.DS_Store
+Thumbs.db

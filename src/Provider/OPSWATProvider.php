@@ -53,8 +53,8 @@ final class OPSWATProvider extends AbstractProvider
 
     /**
      * @param string $url
-     * @return CheckResult
      * @throws ProviderException
+     * @return CheckResult
      */
     public function check(string $url): CheckResult
     {
@@ -118,7 +118,7 @@ final class OPSWATProvider extends AbstractProvider
 
             if (!empty($maliciousSources)) {
                 $threatType = $this->determineThreatType($maliciousSources);
-                $providerNames = array_map(fn(array $s) => $s['provider'], $maliciousSources);
+                $providerNames = array_map(fn (array $s) => $s['provider'], $maliciousSources);
 
                 $threat = new Threat(
                     type: $threatType,
